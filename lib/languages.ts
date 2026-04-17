@@ -1,0 +1,33 @@
+export const COMMON_LANGUAGES = [
+  "English",
+  "Spanish",
+  "French",
+  "German",
+  "Italian",
+  "Portuguese",
+  "Dutch",
+  "Russian",
+  "Ukrainian",
+  "Arabic",
+  "Hebrew",
+  "Hindi",
+  "Bengali",
+  "Urdu",
+  "Turkish",
+  "Persian",
+  "Chinese (Simplified)",
+  "Chinese (Traditional)",
+  "Japanese",
+  "Korean",
+  "Vietnamese",
+  "Thai",
+  "Indonesian",
+  "Malay",
+  "Swahili",
+  "Amharic",
+  "Yoruba",
+  "Hausa",
+] as const;
+
+export type CommonLanguage = (typeof COMMON_LANGUAGES)[number];
+

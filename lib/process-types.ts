@@ -29,10 +29,13 @@ export interface AudioProcessPayload {
   transcriptPlain: string;
   segments: TranscriptSegment[];
   timestamps: TranscriptSegment[];
-  translatedText: string;
+  /** Present when translation is requested; omitted for transcription-only. */
+  translatedText?: string;
   detectedLanguage: string;
   confidence: number;
   speechLanguage?: string;
+  /** ISO 639-1 from a listen-only model pass on the waveform (before transcription). */
+  speechLanguageFromAudio?: string;
 }
 
 export interface VideoProcessPayload {
@@ -40,10 +43,12 @@ export interface VideoProcessPayload {
   transcript: string;
   transcriptPlain: string;
   segments: TranscriptSegment[];
-  translatedText: string;
+  /** Present when translation is requested; omitted for transcription-only. */
+  translatedText?: string;
   detectedLanguage: string;
   confidence: number;
   speechLanguage?: string;
+  speechLanguageFromAudio?: string;
   srtOriginal: string;
   srtEnglish: string;
 }

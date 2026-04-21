@@ -1,6 +1,7 @@
-export function countWords(text: string): number {
-  return text
-    .trim()
+export function countWords(text?: string | null): number {
+  const t = text?.trim();
+  if (!t) return 0;
+  return t
     .split(/\s+/)
     .filter((w) => w.length > 0).length;
 }

@@ -6,6 +6,7 @@ import { createServiceSupabaseClient } from "@/lib/supabase/admin";
 import { transcribeAudio } from "@/lib/services/transcription-service";
 import { minutesFromSegments } from "@/lib/utils/media-duration";
 import { rateLimitApiKey } from "@/lib/rate-limit";
+import { formatUserFacingError } from "@/lib/user-facing-errors";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -86,8 +87,9 @@ export async function POST(request: Request) {
     );
   } catch (err) {
     console.error("[v1/transcribe]", err);
-    const message =
-      err instanceof Error ? err.message : "Transcription failed.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: formatUserFacingError(err) },
+      { status: 500 },
+    );
   }
 }

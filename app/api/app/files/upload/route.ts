@@ -44,9 +44,29 @@ export async function POST(request: Request) {
   const contentSha = sha256Buffer(buffer);
 
   let secureUrl: string;
+  let cloudinaryPublicId: string | null = null;
+  let cloudinaryResourceType: string | null = null;
   try {
-    const up = await uploadBuffer(buffer, `users/${auth.user.id}`, fileName);
+    // Cloudinary often stores PDFs as `raw` when using `auto`, and many accounts
+    // restrict `raw` delivery (causing 401 on direct/open and embedded viewers).
+    // Force PDFs to upload as `image` so they are publicly viewable.
+    let resourceType: "image" | "video" | "raw";
+    if (fileType === "video" || fileType === "audio") resourceType = "video";
+    else if (fileType === "image" || (fileType === "document" && ext === ".pdf")) {
+      resourceType = "image";
+    } else {
+      resourceType = "raw";
+    }
+
+    const up = await uploadBuffer(
+      buffer,
+      `users/${auth.user.id}`,
+      fileName,
+      resourceType,
+    );
     secureUrl = up.secureUrl;
+    cloudinaryPublicId = up.publicId;
+    cloudinaryResourceType = resourceType;
   } catch (e) {
     console.error("[upload]", e);
     const msg = e instanceof Error ? e.message : "Upload to storage failed.";
@@ -61,7 +81,11 @@ export async function POST(request: Request) {
       file_type: fileType,
       status: "uploaded",
       original_url: secureUrl,
-      metadata: { content_sha256: contentSha },
+      metadata: {
+        content_sha256: contentSha,
+        cloudinary_public_id: cloudinaryPublicId,
+        cloudinary_resource_type: cloudinaryResourceType,
+      },
     })
     .select("id")
     .single();

@@ -5,10 +5,14 @@ import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import type { MediaCategory } from "@/lib/types";
 import type { FileRow } from "@/lib/types/saas";
+import { COMMON_LANGUAGES } from "@/lib/languages";
 import { FileCategoryIcon, categoryLabel } from "@/components/ui/file-type-icon";
 import { TranslationPanel } from "@/components/dashboard/translation-panel";
+import { TextTranslator } from "@/components/dashboard/text-translator";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
-const TYPES = ["all", "document", "audio", "video", "image", "spreadsheet"] as const;
+const TYPES = ["all", "document", "audio", "video", "image", "spreadsheet", "text"] as const;
 
 function categoryFromFileType(t: string): MediaCategory {
   const k = t.toLowerCase();
@@ -24,15 +28,12 @@ function categoryFromFileType(t: string): MediaCategory {
   return "document";
 }
 
-function statusStyles(status: string) {
+function statusLabel(status: string) {
   const s = status.toLowerCase();
-  if (s === "completed")
-    return "bg-emerald-500/12 text-emerald-800 ring-1 ring-emerald-500/25 dark:text-emerald-200";
-  if (s === "failed")
-    return "bg-red-500/12 text-red-800 ring-1 ring-red-500/20 dark:text-red-200";
-  if (s === "processing")
-    return "bg-sky-500/12 text-sky-900 ring-1 ring-sky-500/20 dark:text-sky-100";
-  return "bg-amber-500/12 text-amber-950 ring-1 ring-amber-500/20 dark:text-amber-100";
+  if (s === "completed") return "Ready";
+  if (s === "failed") return "Failed";
+  if (s === "processing") return "Processing";
+  return status;
 }
 
 export function FileBrowser() {
@@ -42,6 +43,12 @@ export function FileBrowser() {
   const [type, setType] = useState<(typeof TYPES)[number]>("all");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [batchTarget, setBatchTarget] = useState("English");
+  const [batchMode, setBatchMode] = useState<
+    "standard" | "formal" | "casual" | "technical" | "legal"
+  >("standard");
+  const [batchBusy, setBatchBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [mounted, setMounted] = useState(false);
 
@@ -53,7 +60,7 @@ export function FileBrowser() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (type !== "all") params.set("type", type);
+      if (type !== "all" && type !== "text") params.set("type", type);
       const res = await fetch(`/api/app/files?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load files");
       const data = (await res.json()) as { files: FileRow[] };
@@ -73,8 +80,8 @@ export function FileBrowser() {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setSelectedId(null);
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    globalThis.addEventListener("keydown", onKey);
+    return () => globalThis.removeEventListener("keydown", onKey);
   }, []);
 
   useEffect(() => {
@@ -97,6 +104,89 @@ export function FileBrowser() {
     }
     return rows;
   }, [files, q, favoritesOnly]);
+
+  function toggleRowSelected(id: string) {
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  async function batchProcess() {
+    if (selectedIds.size === 0) return;
+    setBatchBusy(true);
+    try {
+      const res = await fetch("/api/app/files/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "process",
+          fileIds: Array.from(selectedIds),
+          translation: {
+            targetLanguage: batchTarget,
+            mode: batchMode,
+          },
+        }),
+      });
+      const j = (await res.json()) as {
+        error?: string;
+        results?: { fileId: string; ok: boolean; error?: string }[];
+      };
+      if (!res.ok) throw new Error(j.error ?? "Batch failed");
+      const failed = j.results?.filter((r) => !r.ok) ?? [];
+      if (failed.length) {
+        toast.error(
+          `${failed.length} file(s) could not be processed. Check plan limits or errors.`,
+        );
+      } else {
+        toast.success("Batch process finished.");
+      }
+      clearSelection();
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Batch failed");
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  async function batchExport(fmt: "txt" | "pdf" | "docx") {
+    if (selectedIds.size === 0) return;
+    setBatchBusy(true);
+    try {
+      const res = await fetch("/api/app/files/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "export",
+          fileIds: Array.from(selectedIds),
+          format: fmt,
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json()) as { error?: string };
+        throw new Error(j.error ?? "Export failed");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `translations-${fmt}-${Date.now()}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Download started.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Export failed");
+    } finally {
+      setBatchBusy(false);
+    }
+  }
 
   async function toggleFavorite(f: FileRow, e: React.MouseEvent) {
     e.stopPropagation();
@@ -140,15 +230,15 @@ export function FileBrowser() {
     mounted &&
     selectedId &&
     createPortal(
-      <div className="fixed inset-0 z-[100] flex md:pl-0" role="presentation">
+      <div className="fixed inset-0 z-[100] flex" role="presentation">
         <button
           type="button"
-          className="absolute inset-0 bg-background/70 backdrop-blur-[2px] transition-opacity dark:bg-background/80"
+          className="absolute inset-0 bg-black/20 dark:bg-black/40"
           aria-label="Close panel"
           onClick={() => setSelectedId(null)}
         />
         <div
-          className="relative ml-auto flex h-full w-full max-w-[min(100vw,26rem)] flex-col border-l border-border/80 bg-card shadow-[-12px_0_48px_-12px_rgba(0,0,0,0.18)] dark:shadow-[-12px_0_48px_-12px_rgba(0,0,0,0.45)] sm:max-w-md"
+          className="relative ml-auto flex h-full w-full max-w-xl flex-col border-l border-border/80 bg-background shadow-[0_0_0_0.5px_rgba(0,0,0,0.06)] dark:shadow-[0_0_0_0.5px_rgba(255,255,255,0.06)] md:w-[min(44rem,48vw)]"
           role="dialog"
           aria-modal="true"
           aria-labelledby="file-drawer-title"
@@ -164,182 +254,281 @@ export function FileBrowser() {
     );
 
   return (
-    <div className="space-y-8 pb-8">
-      <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-gradient-to-br from-card via-card to-muted/30 p-8 shadow-sm">
-        <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-foreground/[0.04] blur-3xl dark:bg-foreground/[0.07]" />
-        <div className="relative">
-          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Workspace
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-            Your files
-          </h1>
-          <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
-            Upload anything you translate on the home flow — open a file from the list to
-            process, edit translations, and export. The detail panel opens on the right.
-          </p>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <header className="space-y-1">
+        <h1 className="text-[28px] font-semibold tracking-tight text-foreground md:text-[32px]">
+          Files
+        </h1>
+        <p className="text-[14px] leading-relaxed text-muted-foreground">
+          Select a file to translate or export. Details open in the panel on the right.
+        </p>
+      </header>
 
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div className="relative min-w-0 flex-1 lg:max-w-md">
-          <label htmlFor="q" className="sr-only">
-            Search files
+      <div className="flex flex-col gap-5 border-b border-border/60 pb-5 md:flex-row md:items-end md:justify-between">
+        <div className="min-w-0 flex-1 md:max-w-md">
+          <label htmlFor="q" className="mb-2 block text-[13px] font-medium text-muted-foreground">
+            Search
           </label>
-          <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground">
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden>
-              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          </span>
-          <input
+          <Input
             id="q"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search by file name…"
-            className="w-full rounded-2xl border border-border/80 bg-background py-3 pl-11 pr-4 text-sm text-foreground shadow-sm outline-none ring-0 transition placeholder:text-muted-foreground focus:border-foreground/25 focus:ring-2 focus:ring-foreground/10"
+            placeholder="Filter by name"
+            className="h-10"
           />
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-border/80 bg-background px-4 py-2.5 text-sm text-muted-foreground shadow-sm transition hover:bg-muted/60">
+        <div className="flex flex-wrap items-center gap-6">
+          <label className="flex cursor-pointer items-center gap-2 text-[13px] text-muted-foreground">
             <input
               type="checkbox"
               checked={favoritesOnly}
               onChange={(e) => setFavoritesOnly(e.target.checked)}
-              className="rounded border-border text-foreground"
+              className="size-3.5 rounded-sm border-border"
             />
-            Favorites
+            Favorites only
           </label>
-          <label className="inline-flex cursor-pointer items-center justify-center rounded-2xl bg-foreground px-5 py-2.5 text-sm font-semibold text-background shadow-md transition hover:opacity-90 disabled:opacity-50">
-            <input
-              type="file"
-              className="hidden"
-              disabled={uploading}
-              onChange={(e) => void onUpload(e)}
-            />
-            {uploading ? "Uploading…" : "Upload file"}
-          </label>
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="rounded-2xl border border-border bg-background px-4 py-2.5 text-sm font-medium text-foreground shadow-sm transition hover:bg-muted"
-          >
-            Refresh
-          </button>
+          <div className="flex items-center gap-3">
+            <label className="cursor-pointer text-[13px] font-medium text-foreground underline-offset-4 hover:underline">
+              <input
+                type="file"
+                className="hidden"
+                disabled={uploading}
+                onChange={(e) => void onUpload(e)}
+              />
+              {uploading ? "Uploading…" : "Upload"}
+            </label>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="text-[13px] font-medium text-muted-foreground hover:text-foreground"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      {selectedIds.size > 0 && (
+        <div className="flex flex-col gap-4 rounded-lg border border-border/60 bg-muted/20 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-[14px] font-medium text-foreground">
+              {selectedIds.size} selected
+            </p>
+            <button
+              type="button"
+              className="text-[13px] text-muted-foreground hover:text-foreground"
+              onClick={clearSelection}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <label
+                htmlFor="batchTarget"
+                className="mb-1 block text-[12px] font-medium text-muted-foreground"
+              >
+                Batch target language
+              </label>
+              <select
+                id="batchTarget"
+                value={batchTarget}
+                disabled={batchBusy}
+                onChange={(e) => setBatchTarget(e.target.value)}
+                className="h-9 min-w-[140px] border-0 border-b border-border bg-transparent px-0 text-[14px] outline-none"
+              >
+                {COMMON_LANGUAGES.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label
+                htmlFor="batchMode"
+                className="mb-1 block text-[12px] font-medium text-muted-foreground"
+              >
+                Style
+              </label>
+              <select
+                id="batchMode"
+                value={batchMode}
+                disabled={batchBusy}
+                onChange={(e) =>
+                  setBatchMode(
+                    e.target.value as typeof batchMode,
+                  )
+                }
+                className="h-9 min-w-[120px] border-0 border-b border-border bg-transparent px-0 text-[14px] outline-none"
+              >
+                <option value="standard">Standard</option>
+                <option value="formal">Formal</option>
+                <option value="casual">Casual</option>
+                <option value="technical">Technical</option>
+                <option value="legal">Legal</option>
+              </select>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              disabled={batchBusy}
+              onClick={() => void batchProcess()}
+            >
+              {batchBusy ? "Working…" : "Reprocess selected"}
+            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={batchBusy}
+                onClick={() => void batchExport("txt")}
+              >
+                ZIP · TXT
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={batchBusy}
+                onClick={() => void batchExport("pdf")}
+              >
+                ZIP · PDF
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={batchBusy}
+                onClick={() => void batchExport("docx")}
+              >
+                ZIP · DOCX
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2 border-b border-border/40 pb-4">
         {TYPES.map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setType(t)}
-            className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
+            className={`px-3 py-1.5 text-[13px] font-medium transition-colors ${
               type === t
-                ? "bg-foreground text-background shadow-sm"
-                : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
+                ? "text-foreground"
+                : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {t === "all" ? "All types" : categoryLabel(categoryFromFileType(t))}
+            {t === "all"
+              ? "All"
+              : t === "text"
+                ? "Text"
+                : categoryLabel(categoryFromFileType(t))}
           </button>
         ))}
       </div>
 
-      <div className="space-y-2">
-        {loading && (
-          <div className="flex items-center gap-3 rounded-2xl border border-dashed border-border bg-muted/20 px-6 py-12 text-sm text-muted-foreground">
-            <span className="inline-flex h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground" />
-            Loading your files…
-          </div>
-        )}
-        {!loading && filtered.length === 0 && (
-          <div className="rounded-3xl border border-dashed border-border/80 bg-muted/20 px-6 py-16 text-center">
-            <p className="text-base font-medium text-foreground">Nothing here yet</p>
-            <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
-              Upload a document, audio, video, image, or spreadsheet — it will show up in
-              this list. Click a row to open the side panel.
-            </p>
-          </div>
-        )}
-        {!loading &&
-          filtered.map((f) => {
-            const cat = categoryFromFileType(f.file_type);
-            const active = selectedId === f.id;
-            return (
-              <div
-                key={f.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => setSelectedId(f.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setSelectedId(f.id);
-                  }
-                }}
-                className={`group flex w-full cursor-pointer items-center gap-4 rounded-2xl border px-4 py-3.5 text-left transition outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-foreground/20 ${
-                  active
-                    ? "border-foreground/25 bg-muted/50 shadow-md ring-1 ring-foreground/10"
-                    : "border-border/80 bg-card hover:border-foreground/20 hover:bg-muted/40 hover:shadow-sm"
-                }`}
-              >
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-muted/80 text-muted-foreground ring-1 ring-border/50 transition group-hover:bg-muted">
-                  <div className="scale-90">
-                    <FileCategoryIcon category={cat} />
-                  </div>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate font-medium text-foreground">{f.file_name}</span>
-                    {f.is_favorite && (
-                      <span className="shrink-0 text-amber-500" title="Favorite">
-                        ★
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                    <span>{categoryLabel(cat)}</span>
-                    <span className="text-border">·</span>
-                    <span
-                      className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusStyles(f.status)}`}
-                    >
-                      {f.status}
-                    </span>
-                    <span className="text-border">·</span>
-                    <time dateTime={f.created_at}>
-                      {new Date(f.created_at).toLocaleDateString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </time>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={(e) => void toggleFavorite(f, e)}
-                    className="rounded-xl border border-border/80 bg-background px-3 py-1.5 text-xs font-medium text-foreground opacity-80 transition hover:bg-muted hover:opacity-100"
+      <section>
+        {type === "text" ? (
+          <TextTranslator />
+        ) : (
+          <>
+            {loading && (
+              <p className="py-16 text-center text-[15px] text-muted-foreground">Loading…</p>
+            )}
+            {!loading && filtered.length === 0 && (
+              <p className="py-16 text-center text-[15px] leading-relaxed text-muted-foreground">
+                No files match.
+                <br />
+                <span className="text-[13px]">Upload to see it listed here.</span>
+              </p>
+            )}
+            {!loading && filtered.length > 0 && (
+              <ul className="divide-y divide-border/60">
+                {filtered.map((f) => {
+                  const cat = categoryFromFileType(f.file_type);
+                  const active = selectedId === f.id;
+                  return (
+                    <li key={f.id}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedId(f.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setSelectedId(f.id);
+                      }
+                    }}
+                    className={`flex cursor-pointer items-center gap-4 py-4 pr-2 transition-colors outline-none focus-visible:bg-muted/40 ${
+                      active ? "bg-muted/30" : "hover:bg-muted/20"
+                    }`}
                   >
-                    {f.is_favorite ? "Unfavorite" : "Favorite"}
-                  </button>
-                  <span className="text-muted-foreground/50 transition group-hover:text-muted-foreground">
-                    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
-                      <path
-                        d="M9 6l6 6-6 6"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-      </div>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(f.id)}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        toggleRowSelected(f.id);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="size-4 shrink-0 rounded border-border"
+                      aria-label={`Select ${f.file_name}`}
+                    />
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center text-muted-foreground">
+                      <div className="scale-[0.65]">
+                        <FileCategoryIcon category={cat} />
+                      </div>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="truncate text-[15px] font-medium text-foreground">
+                          {f.file_name}
+                        </span>
+                        {f.is_favorite && (
+                          <span className="shrink-0 text-amber-500" aria-hidden>
+                            ★
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[12px] text-muted-foreground">
+                        <span>{categoryLabel(cat)}</span>
+                        <span aria-hidden>·</span>
+                        <span>{statusLabel(f.status)}</span>
+                        <span aria-hidden>·</span>
+                        <time dateTime={f.created_at}>
+                          {new Date(f.created_at).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                          })}
+                        </time>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={(e) => void toggleFavorite(f, e)}
+                        className="text-[12px] font-medium text-muted-foreground hover:text-foreground"
+                      >
+                        {f.is_favorite ? "Unfavorite" : "Favorite"}
+                      </button>
+                      <span className="text-muted-foreground/40" aria-hidden>
+                        →
+                      </span>
+                    </div>
+                  </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        )}
+      </section>
 
       {drawer}
     </div>

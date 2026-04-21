@@ -7,6 +7,7 @@ import {
   translateWithOptions,
   type DocumentPipelineTranslation,
 } from "@/lib/ai";
+import { resolveSpeechLanguage } from "@/lib/speech-language";
 import { createDownloadToken } from "@/lib/download-tokens";
 import { runDocumentPipeline } from "@/lib/pipelines/document-pipeline";
 import { extractTextFromImage } from "@/lib/services/ocr-service";
@@ -18,12 +19,24 @@ import { extractAudioFromVideo } from "@/lib/services/video-service";
 export interface PipelineRunOptions {
   /** When set, enables advanced translation (modes, target language, custom prompt). Omit for legacy Phase-1 behavior. */
   translation?: DocumentPipelineTranslation;
+  /** Optional abort signal (Stop button, request aborted, etc). */
+  signal?: AbortSignal;
+}
+
+export const PIPELINE_CANCELED_MESSAGE = "Canceled";
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal) return;
+  if (signal.aborted) {
+    throw new Error(PIPELINE_CANCELED_MESSAGE);
+  }
 }
 
 function lineBatchOpts(translation?: DocumentPipelineTranslation) {
   return {
     targetLanguage: translation?.targetLanguage ?? "English",
     mode: translation?.mode ?? "standard",
+    glossaryBlock: translation?.glossaryBlock,
   };
 }
 
@@ -37,7 +50,110 @@ function translateLine(
     mode: translation.mode ?? "standard",
     customInstructions: translation.customInstructions,
     documentTypeHint: translation.documentTypeHint,
+    glossaryBlock: translation.glossaryBlock,
+    glossaryRevision: translation.glossaryRevision,
   });
+}
+
+function translationRequested(tr?: DocumentPipelineTranslation): tr is DocumentPipelineTranslation {
+  return !!tr;
+}
+
+async function runAudioPipeline(
+  record: UploadRecord,
+  send: (obj: object) => void,
+  tr: DocumentPipelineTranslation | undefined,
+  check: () => void,
+) {
+  check();
+  send({ step: "transcribing" });
+  const ta = await transcribeAudio(record.buffer, record.fileName);
+  const plain = ta.transcriptPlain ?? ta.transcript;
+  const { detectedLanguage, confidence } = await resolveSpeechLanguage(
+    plain,
+    ta.language,
+    ta.audioLanguageCode,
+  );
+  check();
+  const translatedText = translationRequested(tr) ? await translateLine(plain, tr) : null;
+  if (translationRequested(tr)) send({ step: "translating" });
+  send({
+    step: "completed",
+    payload: {
+      category: "audio" as const,
+      transcript: ta.transcript,
+      transcriptPlain: ta.transcriptPlain,
+      segments: ta.segments,
+      timestamps: ta.timestamps,
+      translatedText: translatedText ?? undefined,
+      detectedLanguage,
+      confidence,
+      speechLanguage: ta.language,
+      speechLanguageFromAudio: ta.audioLanguageCode,
+    },
+  });
+}
+
+async function runVideoPipeline(
+  record: UploadRecord,
+  send: (obj: object) => void,
+  tr: DocumentPipelineTranslation | undefined,
+  check: () => void,
+) {
+  check();
+  send({ step: "extracting_audio" });
+  let cleanup: (() => Promise<void>) | undefined;
+  try {
+    const { audioBuffer, cleanup: c } = await extractAudioFromVideo(
+      record.buffer,
+      record.fileName,
+    );
+    cleanup = c;
+    check();
+    send({ step: "transcribing" });
+    const ta = await transcribeAudio(audioBuffer, "extracted.wav");
+    const plain = ta.transcriptPlain ?? ta.transcript;
+    const { detectedLanguage, confidence } = await resolveSpeechLanguage(
+      plain,
+      ta.language,
+      ta.audioLanguageCode,
+    );
+    check();
+    const translatedText = translationRequested(tr) ? await translateLine(plain, tr) : null;
+    if (translationRequested(tr)) send({ step: "translating" });
+
+    const segTexts = ta.segments.map((s) => s.text);
+    let translatedLines: string[] = [];
+    if (translationRequested(tr) && segTexts.length > 0) {
+      send({ step: "subtitles" });
+      translatedLines = await translateTextsPreservingOrder(segTexts, lineBatchOpts(tr));
+    }
+
+    const srtOriginal = segmentsToSrt(ta.segments);
+    const srtEnglish =
+      translatedLines.length > 0
+        ? segmentsToSrt(ta.segments, translatedLines)
+        : srtOriginal;
+
+    send({
+      step: "completed",
+      payload: {
+        category: "video" as const,
+        transcript: ta.transcript,
+        transcriptPlain: ta.transcriptPlain,
+        segments: ta.segments,
+        translatedText: translatedText ?? undefined,
+        detectedLanguage,
+        confidence,
+        speechLanguage: ta.language,
+        speechLanguageFromAudio: ta.audioLanguageCode,
+        srtOriginal,
+        srtEnglish,
+      },
+    });
+  } finally {
+    await cleanup?.();
+  }
 }
 
 /**
@@ -49,13 +165,18 @@ export async function runPipelineForRecord(
   opts?: PipelineRunOptions,
 ): Promise<void> {
   const tr = opts?.translation;
+  const signal = opts?.signal;
+
+  const check = () => throwIfAborted(signal);
 
   switch (record.category) {
     case "document": {
+      check();
       const r = await runDocumentPipeline(
         record.buffer,
         record.kind as DocumentKind,
         (phase) => {
+          check();
           send({ step: phase });
         },
         tr,
@@ -71,82 +192,20 @@ export async function runPipelineForRecord(
     }
 
     case "audio": {
-      send({ step: "transcribing" });
-      const ta = await transcribeAudio(record.buffer, record.fileName);
-      send({ step: "translating" });
-      const plain = ta.transcriptPlain ?? ta.transcript;
-      const { detectedLanguage, confidence } = await detectLanguage(plain);
-      const translatedText = await translateLine(plain, tr);
-      send({
-        step: "completed",
-        payload: {
-          category: "audio" as const,
-          transcript: ta.transcript,
-          transcriptPlain: ta.transcriptPlain,
-          segments: ta.segments,
-          timestamps: ta.timestamps,
-          translatedText,
-          detectedLanguage,
-          confidence,
-          speechLanguage: ta.language,
-        },
-      });
+      await runAudioPipeline(record, send, tr, check);
       break;
     }
 
     case "video": {
-      send({ step: "extracting_audio" });
-      let cleanup: (() => Promise<void>) | undefined;
-      try {
-        const { audioBuffer, cleanup: c } = await extractAudioFromVideo(
-          record.buffer,
-          record.fileName,
-        );
-        cleanup = c;
-        send({ step: "transcribing" });
-        const ta = await transcribeAudio(audioBuffer, "extracted.wav");
-        send({ step: "translating" });
-        const plain = ta.transcriptPlain ?? ta.transcript;
-        const { detectedLanguage, confidence } = await detectLanguage(plain);
-        const translatedText = await translateLine(plain, tr);
-        const segTexts = ta.segments.map((s) => s.text);
-        let translatedLines: string[] = [];
-        if (segTexts.length > 0) {
-          send({ step: "subtitles" });
-          translatedLines = await translateTextsPreservingOrder(
-            segTexts,
-            lineBatchOpts(tr),
-          );
-        }
-        const srtOriginal = segmentsToSrt(ta.segments);
-        const srtEnglish =
-          translatedLines.length > 0
-            ? segmentsToSrt(ta.segments, translatedLines)
-            : srtOriginal;
-        send({
-          step: "completed",
-          payload: {
-            category: "video" as const,
-            transcript: ta.transcript,
-            transcriptPlain: ta.transcriptPlain,
-            segments: ta.segments,
-            translatedText,
-            detectedLanguage,
-            confidence,
-            speechLanguage: ta.language,
-            srtOriginal,
-            srtEnglish,
-          },
-        });
-      } finally {
-        await cleanup?.();
-      }
+      await runVideoPipeline(record, send, tr, check);
       break;
     }
 
     case "image": {
+      check();
       send({ step: "ocr" });
       const originalText = await extractTextFromImage(record.buffer);
+      check();
       send({ step: "translating" });
       const { detectedLanguage, confidence } = await detectLanguage(originalText);
       const translatedText = await translateLine(originalText, tr);
@@ -164,6 +223,7 @@ export async function runPipelineForRecord(
     }
 
     case "spreadsheet": {
+      check();
       send({ step: "spreadsheet", detail: "translating_cells" });
       const translateOpts = tr
         ? {
@@ -171,6 +231,8 @@ export async function runPipelineForRecord(
             mode: tr.mode ?? "standard",
             customInstructions: tr.customInstructions,
             documentTypeHint: tr.documentTypeHint,
+            glossaryBlock: tr.glossaryBlock,
+            glossaryRevision: tr.glossaryRevision,
           }
         : undefined;
       const { data, fileName } = await translateSpreadsheetBuffer(
@@ -178,6 +240,7 @@ export async function runPipelineForRecord(
         record.fileName,
         translateOpts,
       );
+      check();
       const downloadToken = createDownloadToken({
         data,
         fileName,

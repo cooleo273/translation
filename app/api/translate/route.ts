@@ -1,4 +1,5 @@
 import { rateLimitGuest } from "@/lib/rate-limit";
+import { formatUserFacingError } from "@/lib/user-facing-errors";
 import { NextResponse } from "next/server";
 import { detectLanguage, translateToEnglish } from "@/lib/ai";
 import { extractText } from "@/lib/extract-text";
@@ -86,18 +87,17 @@ export async function POST(request: Request) {
     }
   } catch (err) {
     console.error("[translate]", err);
-    const message =
-      err instanceof Error ? err.message : "Translation failed.";
+    const raw = err instanceof Error ? err.message : "";
     const isUser =
       err instanceof Error &&
-      (message.includes("Gemini API keys") ||
-        message.includes("GEMINI_API_KEY") ||
-        message.includes("No extractable text") ||
-        message.includes("exceeds") ||
-        message.includes("Could not determine"));
+      (raw.includes("Gemini API keys") ||
+        raw.includes("GEMINI_API_KEY") ||
+        raw.includes("No extractable text") ||
+        raw.includes("exceeds") ||
+        raw.includes("Could not determine"));
 
     return NextResponse.json(
-      { error: isUser ? message : "Translation failed. Please try again." },
+      { error: formatUserFacingError(err) },
       { status: isUser ? 400 : 500 },
     );
   }

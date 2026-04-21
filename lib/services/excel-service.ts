@@ -15,6 +15,8 @@ async function translateCellText(
     mode: opts.mode ?? "standard",
     customInstructions: opts.customInstructions,
     documentTypeHint: opts.documentTypeHint,
+    glossaryBlock: opts.glossaryBlock,
+    glossaryRevision: opts.glossaryRevision,
   });
 }
 

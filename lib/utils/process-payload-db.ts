@@ -2,7 +2,7 @@ import type { ProcessPayload } from "@/lib/process-types";
 
 export function primaryTextsFromPayload(
   payload: ProcessPayload,
-): { original: string; translated: string; detectedLanguage: string } | null {
+): { original: string; translated?: string; detectedLanguage: string } | null {
   switch (payload.category) {
     case "document":
     case "image":

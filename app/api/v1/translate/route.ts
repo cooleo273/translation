@@ -8,6 +8,7 @@ import { extractText } from "@/lib/extract-text";
 import type { DocumentKind } from "@/lib/types";
 import { countWords } from "@/lib/utils/usage-metrics";
 import { rateLimitApiKey } from "@/lib/rate-limit";
+import { formatUserFacingError } from "@/lib/user-facing-errors";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -135,8 +136,9 @@ export async function POST(request: Request) {
     );
   } catch (err) {
     console.error("[v1/translate]", err);
-    const message =
-      err instanceof Error ? err.message : "Translation failed.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: formatUserFacingError(err) },
+      { status: 500 },
+    );
   }
 }

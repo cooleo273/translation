@@ -7,8 +7,7 @@ import {
   ratePerVideoMinuteUsd,
   ratePerWordUsd,
 } from "@/lib/billing/rates";
-import { countWords } from "@/lib/utils/usage-metrics";
-import { estimateAudioSecondsFromBytes } from "@/lib/utils/usage-metrics";
+import { countWords, estimateAudioSecondsFromBytes } from "@/lib/utils/usage-metrics";
 import {
   minutesFromAudioOrVideo,
   secondsFromSegments,
@@ -119,6 +118,7 @@ export function optionsHashFromTranslation(
     mode: tr?.mode ?? "standard",
     customInstructions: tr?.customInstructions ?? null,
     documentTypeHint: tr?.documentTypeHint ?? null,
+    glossaryRevision: tr?.glossaryRevision ?? null,
   };
   return Buffer.from(JSON.stringify(stable), "utf8").toString("base64url");
 }

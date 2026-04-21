@@ -20,20 +20,25 @@ export async function uploadBuffer(
   buffer: Buffer,
   folder: string,
   fileName: string,
+  resourceType: "image" | "video" | "raw" | "auto" = "auto",
 ): Promise<{ secureUrl: string; publicId: string; bytes: number }> {
   ensureConfig();
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
         folder: `translation-saas/${folder}`,
-        resource_type: "auto",
+        resource_type: resourceType,
+        // Some Cloudinary accounts restrict delivery unless explicitly public.
+        // Ensure PDFs (and all uploads) are publicly deliverable via their secure_url.
+        access_mode: "public",
+        type: "upload",
         use_filename: true,
         unique_filename: true,
         filename_override: fileName,
       },
       (err, result) => {
         if (err || !result) {
-          reject(err ?? new Error("Cloudinary upload failed"));
+          reject(err instanceof Error ? err : new Error("Cloudinary upload failed"));
           return;
         }
         resolve({

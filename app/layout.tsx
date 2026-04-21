@@ -2,11 +2,9 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
-import { Geist } from "next/font/google";
 import { cn } from "@/lib/utils";
-
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -31,13 +29,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning className={cn("font-sans", geist.variable)}>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={cn("font-sans", geistSans.variable, "[--font-sans:var(--font-geist-sans)]")}
+    >
       <body
         className={`${geistSans.variable} ${geistMono.variable} min-h-screen bg-background text-foreground antialiased`}
       >
         <ThemeProvider>
-          {children}
-          <Toaster richColors position="top-center" closeButton />
+          <TooltipProvider delay={200}>
+            {children}
+            <Toaster richColors position="top-center" closeButton />
+          </TooltipProvider>
         </ThemeProvider>
       </body>
     </html>

@@ -1,0 +1,10 @@
+{
+  "name": "@translation/saas-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Thin API client for v1 translate/transcribe/ocr endpoints (Bearer API key).",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts"
+  }
+}

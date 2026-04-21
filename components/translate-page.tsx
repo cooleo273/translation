@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { MultimodalResult } from "@/components/ui/multimodal-result";
 import { UploadZone } from "@/components/ui/upload-zone";
@@ -56,37 +56,66 @@ export function TranslatePage() {
   const [payload, setPayload] = useState<ProcessPayload | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [targetLanguage, setTargetLanguage] = useState<string>("English");
   const [customTarget, setCustomTarget] = useState<string>("");
   const [mode, setMode] = useState<
     NonNullable<DocumentPipelineTranslation["mode"]>
   >("standard");
+  const abortRef = useRef<AbortController | null>(null);
 
   const busy = phase !== "idle";
+  const transcribeOnly = category === "audio" || category === "video";
 
   useEffect(() => {
     if (!file) {
       setVideoUrl(null);
       setImageUrl(null);
+      setAudioUrl(null);
+      setPdfUrl(null);
       return;
     }
     const ext = getExtension(file.name);
     if (!isAllowedExtension(ext)) return;
     const cat = extensionToCategory(ext);
+    let blobUrl: string | null = null;
     if (cat === "video") {
-      const u = URL.createObjectURL(file);
-      setVideoUrl(u);
+      blobUrl = URL.createObjectURL(file);
+      setVideoUrl(blobUrl);
       setImageUrl(null);
-      return () => URL.revokeObjectURL(u);
+      setAudioUrl(null);
+      setPdfUrl(null);
+      return () => URL.revokeObjectURL(blobUrl!);
     }
     if (cat === "image") {
-      const u = URL.createObjectURL(file);
-      setImageUrl(u);
+      blobUrl = URL.createObjectURL(file);
+      setImageUrl(blobUrl);
       setVideoUrl(null);
-      return () => URL.revokeObjectURL(u);
+      setAudioUrl(null);
+      setPdfUrl(null);
+      return () => URL.revokeObjectURL(blobUrl!);
+    }
+    if (cat === "audio") {
+      blobUrl = URL.createObjectURL(file);
+      setAudioUrl(blobUrl);
+      setVideoUrl(null);
+      setImageUrl(null);
+      setPdfUrl(null);
+      return () => URL.revokeObjectURL(blobUrl!);
+    }
+    if (cat === "document" && ext === ".pdf") {
+      blobUrl = URL.createObjectURL(file);
+      setPdfUrl(blobUrl);
+      setVideoUrl(null);
+      setImageUrl(null);
+      setAudioUrl(null);
+      return () => URL.revokeObjectURL(blobUrl!);
     }
     setVideoUrl(null);
     setImageUrl(null);
+    setAudioUrl(null);
+    setPdfUrl(null);
   }, [file]);
 
   const validateClientFile = useCallback((f: File | null) => {
@@ -127,30 +156,40 @@ export function TranslatePage() {
         ? customTarget.trim()
         : targetLanguage.trim()) || "English";
 
-      const translation: DocumentPipelineTranslation = {
-        targetLanguage: tl,
-        mode,
-      };
+      const translation: DocumentPipelineTranslation | undefined = transcribeOnly
+        ? undefined
+        : {
+            targetLanguage: tl,
+            mode,
+          };
 
+      const controller = new AbortController();
+      abortRef.current = controller;
       const result = await processUploadStream(
         up.uploadId,
         (ev) => {
           setStatusLine(describeStep(ev));
         },
         translation,
+        controller.signal,
       );
 
       setPayload(result);
       toast.success("Processing complete.");
     } catch (e) {
       const message = e instanceof Error ? e.message : "Something went wrong.";
-      toast.error(message);
+      if (message !== "Canceled") toast.error(message);
     } finally {
+      abortRef.current = null;
       setPhase("idle");
       setUploadPct(0);
       setStatusLine("");
     }
-  }, [customTarget, file, mode, targetLanguage]);
+  }, [customTarget, file, mode, targetLanguage, transcribeOnly]);
+
+  const stopProcessing = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   const downloadTxt = useCallback((text: string, name: string) => {
     const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
@@ -188,8 +227,9 @@ export function TranslatePage() {
   const buttonLabel = useMemo(() => {
     if (phase === "uploading") return "Uploading…";
     if (phase === "processing") return "Processing…";
-    return "Process & translate";
-  }, [phase]);
+    if (transcribeOnly) return "Transcribe";
+    return "Translate";
+  }, [phase, transcribeOnly]);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background via-card to-background px-4 pb-16 pt-0 sm:px-6 lg:px-8">
@@ -214,56 +254,72 @@ export function TranslatePage() {
           />
 
           <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-medium text-muted-foreground">
-                Translate to
-              </label>
-              <select
-                value={targetLanguage}
-                disabled={busy}
-                onChange={(e) => setTargetLanguage(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"
-              >
-                {COMMON_LANGUAGES.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-                <option value="__custom__">Custom…</option>
-              </select>
-              {targetLanguage === "__custom__" && (
-                <input
-                  value={customTarget}
-                  disabled={busy}
-                  onChange={(e) => setCustomTarget(e.target.value)}
-                  placeholder="Type any language Gemini supports (e.g. Somali)"
-                  className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"
-                />
-              )}
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground">
-                Style
-              </label>
-              <select
-                value={mode}
-                disabled={busy}
-                onChange={(e) =>
-                  setMode(
-                    e.target.value as NonNullable<
-                      DocumentPipelineTranslation["mode"]
-                    >,
-                  )
-                }
-                className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"
-              >
-                <option value="standard">Standard</option>
-                <option value="formal">Formal</option>
-                <option value="casual">Casual</option>
-                <option value="technical">Technical</option>
-                <option value="legal">Legal</option>
-              </select>
-            </div>
+            {transcribeOnly ? (
+              <div className="sm:col-span-3 rounded-xl border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                We’ll automatically detect the spoken language and return a transcription.
+              </div>
+            ) : (
+              <>
+                <div className="sm:col-span-2">
+                  <label
+                    htmlFor="targetLanguage"
+                    className="block text-xs font-medium text-muted-foreground"
+                  >
+                    Translate to
+                  </label>
+                  <select
+                    id="targetLanguage"
+                    value={targetLanguage}
+                    disabled={busy}
+                    onChange={(e) => setTargetLanguage(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"
+                  >
+                    {COMMON_LANGUAGES.map((l) => (
+                      <option key={l} value={l}>
+                        {l}
+                      </option>
+                    ))}
+                    <option value="__custom__">Custom…</option>
+                  </select>
+                  {targetLanguage === "__custom__" && (
+                    <input
+                      value={customTarget}
+                      disabled={busy}
+                      onChange={(e) => setCustomTarget(e.target.value)}
+                      placeholder="Type any language Gemini supports (e.g. Somali)"
+                      className="mt-2 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"
+                    />
+                  )}
+                </div>
+                <div>
+                  <label
+                    htmlFor="styleMode"
+                    className="block text-xs font-medium text-muted-foreground"
+                  >
+                    Style
+                  </label>
+                  <select
+                    id="styleMode"
+                    value={mode}
+                    disabled={busy}
+                    onChange={(e) =>
+                      setMode(
+                        e.target.value as NonNullable<
+                          DocumentPipelineTranslation["mode"]
+                        >,
+                      )
+                    }
+                    className="mt-1 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"
+                  >
+                    <option value="standard">Standard</option>
+                    <option value="formal">Formal</option>
+                    <option value="casual">Casual</option>
+                    <option value="technical">Technical</option>
+                    <option value="legal">Legal</option>
+                  </select>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="mt-6 flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -278,6 +334,15 @@ export function TranslatePage() {
               )}
               {buttonLabel}
             </button>
+            {phase === "processing" && (
+              <button
+                type="button"
+                onClick={stopProcessing}
+                className="inline-flex items-center justify-center rounded-2xl border border-border bg-background px-6 py-3.5 text-sm font-semibold text-foreground shadow-sm transition hover:bg-muted/40 active:scale-[0.99]"
+              >
+                Stop
+              </button>
+            )}
             {file && !busy && (
               <p className="text-center text-xs text-muted-foreground sm:text-right">
                 {(file.size / 1024).toFixed(1)} KB
@@ -316,6 +381,8 @@ export function TranslatePage() {
             previewFile={file}
             videoObjectUrl={videoUrl}
             imageObjectUrl={imageUrl}
+            audioObjectUrl={audioUrl}
+            pdfObjectUrl={pdfUrl}
             targetLanguage={
               (targetLanguage === "__custom__"
                 ? customTarget.trim()

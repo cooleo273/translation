@@ -1,5 +1,9 @@
 import type { GeminiTranscriptionParse } from "@/lib/ai";
-import { transcribeAudioWithGemini } from "@/lib/ai";
+import {
+  detectPrimarySpokenLanguageFromAudio,
+  transcribeAudioWithGemini,
+} from "@/lib/ai";
+import { normalizeIso6391 } from "@/lib/language-codes";
 import {
   AUDIO_TRANSCRIBE_CHUNK_SECONDS,
   extractAudioChunkAsWav,
@@ -24,6 +28,8 @@ export interface TranscriptionResult {
   /** Same as segments (API compatibility). */
   timestamps: TranscriptSegment[];
   language?: string;
+  /** ISO 639-1 from a listen-only Gemini pass on the waveform (more reliable than text). */
+  audioLanguageCode?: string;
 }
 
 function guessMime(fileName: string): string {
@@ -62,27 +68,48 @@ export function formatTranscriptDiarized(segments: TranscriptSegment[]): string 
 function mergeGeminiChunks(
   parts: Array<{ offsetSec: number; raw: GeminiTranscriptionParse }>,
 ): GeminiTranscriptionParse {
-  const merged: GeminiTranscriptionParse["segments"] = [];
-  let language: string | undefined;
+  const mergedSegments: GeminiTranscriptionParse["segments"] = [];
+  const transcripts: string[] = [];
+  const langVotes = new Map<string, number>();
 
   for (const { offsetSec, raw } of parts) {
-    if (raw.language) language = raw.language;
-    for (const s of raw.segments) {
-      if (!s.text.trim()) continue;
-      merged.push({
-        start: s.start + offsetSec,
-        end: s.end + offsetSec,
-        text: s.text.trim(),
-        ...(s.speaker ? { speaker: s.speaker } : {}),
-      });
+    const code = normalizeIso6391(raw.language ?? undefined);
+    if (code) {
+      langVotes.set(code, (langVotes.get(code) ?? 0) + 1);
+    }
+
+    if (raw.segments.length > 0) {
+      for (const s of raw.segments) {
+        if (!s.text.trim()) continue;
+        mergedSegments.push({
+          start: s.start + offsetSec,
+          end: s.end + offsetSec,
+          text: s.text.trim(),
+          ...(s.speaker ? { speaker: s.speaker } : {}),
+        });
+      }
+    } else if (raw.transcript.trim()) {
+      // Fallback if model didn't return segments for this chunk
+      transcripts.push(raw.transcript.trim());
     }
   }
 
-  merged.sort((a, b) => a.start - b.start || a.end - b.end);
+  mergedSegments.sort((a, b) => a.start - b.start || a.end - b.end);
+
+  let language: string | undefined;
+  if (langVotes.size > 0) {
+    const best = Array.from(langVotes.entries()).sort((a, b) => b[1] - a[1])[0];
+    language = best[0];
+  }
+
+  const combinedTranscript =
+    mergedSegments.length > 0
+      ? mergedSegments.map((s) => s.text).join(" ")
+      : transcripts.join(" ");
 
   return {
-    transcript: "",
-    segments: merged,
+    transcript: combinedTranscript,
+    segments: mergedSegments,
     language,
   };
 }
@@ -103,18 +130,37 @@ export async function transcribeAudio(
   const longEnoughToChunk =
     durationSec !== null && durationSec > chunkSec + 1;
 
+  let audioLanguageCode: string | undefined;
+  try {
+    if (longEnoughToChunk && durationSec !== null) {
+      const len = Math.min(chunkSec, durationSec);
+      const chunk0 = await extractAudioChunkAsWav(buffer, fileName, 0, len);
+      const code = await detectPrimarySpokenLanguageFromAudio(chunk0, "audio/wav");
+      if (code) audioLanguageCode = code;
+    } else {
+      const code = await detectPrimarySpokenLanguageFromAudio(buffer, mime);
+      if (code) audioLanguageCode = code;
+    }
+  } catch (e) {
+    console.warn("[spoken-language from audio]", e);
+  }
+
   if (longEnoughToChunk && durationSec !== null) {
     const dur = durationSec;
     const parts: Array<{ offsetSec: number; raw: GeminiTranscriptionParse }> = [];
     for (let offset = 0; offset < dur; offset += chunkSec) {
       const len = Math.min(chunkSec, dur - offset);
       const chunkBuf = await extractAudioChunkAsWav(buffer, fileName, offset, len);
-      const part = await transcribeAudioWithGemini(chunkBuf, "audio/wav");
+      const part = await transcribeAudioWithGemini(chunkBuf, "audio/wav", {
+        languageHintIso6391: audioLanguageCode,
+      });
       parts.push({ offsetSec: offset, raw: part });
     }
     raw = mergeGeminiChunks(parts);
   } else {
-    raw = await transcribeAudioWithGemini(buffer, mime);
+    raw = await transcribeAudioWithGemini(buffer, mime, {
+      languageHintIso6391: audioLanguageCode,
+    });
   }
 
   const segments: TranscriptSegment[] = raw.segments
@@ -146,5 +192,6 @@ export async function transcribeAudio(
     segments,
     timestamps: segments,
     language: raw.language,
+    audioLanguageCode,
   };
 }

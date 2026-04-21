@@ -5,7 +5,7 @@ import path from "node:path";
 import { getFfmpegPath } from "@/lib/ffmpeg-path";
 
 /** Long audio is transcribed in chunks to avoid model output limits and coverage gaps. */
-export const AUDIO_TRANSCRIBE_CHUNK_SECONDS = 300;
+export const AUDIO_TRANSCRIBE_CHUNK_SECONDS = 60;
 
 async function runFfmpeg(args: string[]): Promise<void> {
   const ffmpegPath = await getFfmpegPath();

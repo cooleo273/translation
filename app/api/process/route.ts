@@ -1,5 +1,6 @@
 import type { DocumentPipelineTranslation } from "@/lib/ai";
 import { rateLimitGuest } from "@/lib/rate-limit";
+import { formatUserFacingError } from "@/lib/user-facing-errors";
 import { runPipelineForRecord } from "@/lib/server/pipeline-executor";
 import { deleteUpload, takeUpload } from "@/lib/upload-store";
 
@@ -75,12 +76,10 @@ export async function POST(request: Request) {
 
         try {
           send({ step: "processing", detail: "starting" });
-          await runPipelineForRecord(record, send, { translation });
+          await runPipelineForRecord(record, send, { translation, signal: request.signal });
         } catch (err) {
           console.error("[process]", err);
-          const message =
-            err instanceof Error ? err.message : "Processing failed.";
-          send({ step: "error", message });
+          send({ step: "error", message: formatUserFacingError(err) });
         } finally {
           deleteUpload(uploadId);
           controller.close();

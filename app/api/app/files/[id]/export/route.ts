@@ -1,4 +1,5 @@
 import { requireUser } from "@/lib/controllers/require-user";
+import { getTranslatedPlainTextForFile } from "@/lib/server/translation-export-text";
 import {
   buildDocxBuffer,
   buildPdfBuffer,
@@ -78,30 +79,16 @@ export async function GET(
     return NextResponse.json({ error: "Unsupported format." }, { status: 400 });
   }
 
-  const { data: tr } = await auth.supabase
-    .from("translations")
-    .select("translated_text, document_type")
-    .eq("file_id", id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const text = tr?.translated_text;
-  if (
-    !text?.trim() ||
-    tr?.document_type === "spreadsheet" ||
-    text === "[spreadsheet translated]"
-  ) {
-    return NextResponse.json(
-      {
-        error:
-          "No plain translation text for export. Use format=spreadsheet for spreadsheets.",
-      },
-      { status: 400 },
-    );
+  const payload = await getTranslatedPlainTextForFile(
+    auth.supabase,
+    auth.user.id,
+    id,
+  );
+  if (!payload.ok) {
+    return NextResponse.json({ error: payload.message }, { status: 400 });
   }
 
-  const stem = baseName(fileRow.file_name, "translation");
+  const { stem, text } = payload;
   const txtName = encodeURIComponent(`${stem}.txt`);
   const docxName = encodeURIComponent(`${stem}.docx`);
   const pdfName = encodeURIComponent(`${stem}.pdf`);

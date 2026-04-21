@@ -36,6 +36,8 @@ export async function runDocumentPipeline(
       mode: translation.mode ?? "standard",
       customInstructions: translation.customInstructions,
       documentTypeHint: docHint,
+      glossaryBlock: translation.glossaryBlock,
+      glossaryRevision: translation.glossaryRevision,
     });
   }
 

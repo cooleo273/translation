@@ -21,6 +21,8 @@ export function MultimodalResult({
   previewFile,
   videoObjectUrl,
   imageObjectUrl,
+  audioObjectUrl = null,
+  pdfObjectUrl = null,
   targetLanguage,
   onDownloadTxt,
   onDownloadSrt,
@@ -31,6 +33,10 @@ export function MultimodalResult({
   previewFile: File | null;
   videoObjectUrl: string | null;
   imageObjectUrl: string | null;
+  /** Local blob URL for MP3/WAV etc. */
+  audioObjectUrl?: string | null;
+  /** Local blob URL for PDF preview */
+  pdfObjectUrl?: string | null;
   targetLanguage?: string;
   onDownloadTxt: (text: string, name: string) => void;
   onDownloadSrt: (srt: string, name: string) => void;
@@ -131,8 +137,11 @@ export function MultimodalResult({
           {active === "original" && (
             <OriginalPane
               payload={payload}
+              previewFile={previewFile}
               videoObjectUrl={videoObjectUrl}
               imageObjectUrl={imageObjectUrl}
+              audioObjectUrl={audioObjectUrl}
+              pdfObjectUrl={pdfObjectUrl}
             />
           )}
           {active === "transcript" && (
@@ -175,12 +184,18 @@ export function MultimodalResult({
 
 function OriginalPane({
   payload,
+  previewFile,
   videoObjectUrl,
   imageObjectUrl,
+  audioObjectUrl,
+  pdfObjectUrl,
 }: {
   payload: ProcessPayload;
+  previewFile: File | null;
   videoObjectUrl: string | null;
   imageObjectUrl: string | null;
+  audioObjectUrl: string | null;
+  pdfObjectUrl: string | null;
 }) {
   if (payload.category === "document") {
     return (
@@ -188,6 +203,13 @@ function OriginalPane({
         <h3 className="text-xs font-semibold uppercase text-muted-foreground mb-2">
           Original
         </h3>
+        {pdfObjectUrl ? (
+          <iframe
+            title="PDF preview"
+            src={pdfObjectUrl}
+            className="mb-4 h-[min(45vh,400px)] w-full border-0 bg-muted/30"
+          />
+        ) : null}
         <pre className="whitespace-pre-wrap text-sm text-foreground max-h-[min(50vh,28rem)] overflow-y-auto">
           {payload.originalText}
         </pre>
@@ -234,6 +256,10 @@ function OriginalPane({
         <h3 className="text-xs font-semibold uppercase text-muted-foreground mb-2">
           Audio
         </h3>
+        {audioObjectUrl ? (
+          /* eslint-disable-next-line jsx-a11y/media-has-caption -- user file */
+          <audio controls className="mb-4 w-full" preload="metadata" src={audioObjectUrl} />
+        ) : null}
         <p className="text-sm text-muted-foreground">
           Open the Transcript tab to read the full transcription.
         </p>
@@ -246,9 +272,15 @@ function OriginalPane({
         <h3 className="text-xs font-semibold uppercase text-muted-foreground mb-2">
           Spreadsheet
         </h3>
+        {previewFile && (
+          <p className="mb-3 text-xs text-muted-foreground">
+            File: <span className="font-medium text-foreground">{previewFile.name}</span>
+          </p>
+        )}
         <p className="text-sm text-muted-foreground">
-          Text cells were translated. Numbers and formulas were left unchanged.
-          Use Download to save the translated file.
+          Cell text is translated in the exported file. Use Download to save the translated
+          spreadsheet. For a full table preview of uploaded files, open the file from the
+          dashboard after it is stored in cloud.
         </p>
       </>
     );
@@ -279,9 +311,25 @@ function TranscriptPane({
       <pre className="whitespace-pre-wrap text-sm text-foreground max-h-[min(50vh,28rem)] overflow-y-auto">
         {payload.transcript}
       </pre>
-      {payload.speechLanguage && (
+      {(payload.speechLanguageFromAudio || payload.speechLanguage) && (
         <p className="mt-2 text-xs text-muted-foreground">
-          Spoken language (detected): {payload.speechLanguage}
+          {payload.speechLanguageFromAudio && (
+            <>
+              Audio language signal (ISO):{" "}
+              <span className="font-medium text-foreground">
+                {payload.speechLanguageFromAudio}
+              </span>
+              {payload.speechLanguage ? " · " : null}
+            </>
+          )}
+          {payload.speechLanguage && (
+            <>
+              Transcript metadata:{" "}
+              <span className="font-medium text-foreground">
+                {payload.speechLanguage}
+              </span>
+            </>
+          )}
         </p>
       )}
     </>

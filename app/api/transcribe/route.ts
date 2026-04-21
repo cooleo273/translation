@@ -1,4 +1,5 @@
 import { rateLimitGuest } from "@/lib/rate-limit";
+import { formatUserFacingError } from "@/lib/user-facing-errors";
 import { NextResponse } from "next/server";
 import { transcribeAudio } from "@/lib/services/transcription-service";
 import { deleteUpload, takeUpload } from "@/lib/upload-store";
@@ -85,16 +86,15 @@ export async function POST(request: Request) {
     }
   } catch (err) {
     console.error("[transcribe]", err);
-    const message =
-      err instanceof Error ? err.message : "Transcription failed.";
+    const raw = err instanceof Error ? err.message : "";
     const isUser =
       err instanceof Error &&
-      (message.includes("Gemini API keys") ||
-        message.includes("GEMINI_API_KEY") ||
-        message.includes("Transcription returned no text") ||
-        message.includes("Transcription response"));
+      (raw.includes("Gemini API keys") ||
+        raw.includes("GEMINI_API_KEY") ||
+        raw.includes("Transcription returned no text") ||
+        raw.includes("Transcription response"));
     return NextResponse.json(
-      { error: isUser ? message : "Transcription failed." },
+      { error: formatUserFacingError(err) },
       { status: isUser ? 400 : 500 },
     );
   }
